@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Panel de Control - TV Musical</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+:root{--bg:#020617;--panel:#0f172a;--accent:#38bdf8;--success:#22c55e;--danger:#ef4444;--warning:#f59e0b;--text:#f8fafc;--muted:#94a3b8}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:linear-gradient(135deg,#020617,#111827);color:var(--text)}
+.wrapper{max-width:1100px;margin:auto;padding:20px}
+h1{margin:0 0 6px;font-size:26px}
+.subtitle{color:var(--muted);margin-bottom:18px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.card{background:rgba(15,23,42,.94);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:16px}
+label{display:block;margin:12px 0 5px;color:#cbd5e1;font-size:14px}
+input,select,button{width:100%;border:0;border-radius:10px;padding:11px;font-size:14px}
+input,select{background:#020617;color:white;border:1px solid rgba(255,255,255,.13)}
+button{margin-top:9px;cursor:pointer;font-weight:bold;background:var(--accent);color:#00111f;transition:.2s}
+button:hover{filter:brightness(1.1);transform:translateY(-1px)}
+button.active{background:var(--success);box-shadow:0 0 18px rgba(34,197,94,.45)}
+button.danger{background:var(--danger);color:white}
+button.warning{background:var(--warning);color:#111827}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.status{color:#cbd5e1;line-height:1.5}
+.badge{display:inline-block;background:rgba(56,189,248,.14);color:#7dd3fc;padding:5px 9px;border-radius:999px;font-size:12px;margin:3px}
+.list{max-height:230px;overflow:auto}
+.item{background:#020617;border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:9px;margin:7px 0;color:#cbd5e1;font-size:13px}
+.item small{color:var(--muted)}
+.notice{border:1px solid rgba(34,197,94,.35);background:rgba(34,197,94,.08);color:#bbf7d0;padding:12px;border-radius:12px;margin-top:10px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrapper">
+<h1>Panel de Control - TV Musical</h1>
+<div class="subtitle">Controla desde aquí. El reproductor limpio va aparte para OBS.</div>
+
+<div class="grid">
+<div class="card">
+<strong>1. Cargar contenido</strong>
+<label>Videos musicales individuales</label>
+<input id="musicInput" type="file" accept="video/*" multiple>
+<label>Carpetas de videos musicales</label>
+<input id="musicFolderInput" type="file" accept="video/*" multiple webkitdirectory directory>
+<label>Videos de publicidad</label>
+<input id="adsInput" type="file" accept="video/*" multiple>
+</div>
+
+<div class="card">
+<strong>2. Programación</strong>
+<label>Cada cuántos minutos mostrar publicidad</label>
+<input id="adEvery" type="number" min="1" value="10">
+<label>Cantidad de publicidades por bloque</label>
+<input id="adsPerBlock" type="number" min="1" value="2">
+<label>Modo de publicidad</label>
+<select id="adMode">
+<option value="time">Por tiempo programado</option>
+<option value="song">Al terminar canción si ya se cumplió el tiempo</option>
+</select>
+<label>Después de publicidad</label>
+<select id="afterAdMode">
+<option value="resume">Continuar el mismo video donde quedó</option>
+<option value="next">Ir al siguiente video musical</option>
+</select>
+<label>Orden musical</label>
+<select id="musicOrder">
+<option value="normal">Normal / en orden</option>
+<option value="random">Aleatorio sin repetir</option>
+</select>
+<button id="sendConfigBtn">Enviar configuración al reproductor</button>
+</div>
+
+<div class="card">
+<strong>3. Control</strong>
+<div class="row">
+<button id="playBtn">▶ Play</button>
+<button id="pauseBtn" class="warning">⏸ Pause</button>
+</div>
+<div class="row">
+<button id="nextBtn">⏭ Siguiente</button>
+<button id="stopBtn" class="danger">■ Stop</button>
+</div>
+<button id="reloadPlayerBtn">Actualizar reproductor</button>
+<button id="clearBtn" class="danger">Limpiar listas</button>
+</div>
+
+<div class="card status">
+<strong>Estado</strong>
+<p id="status">Abre primero el reproductor limpio y luego carga los videos.</p>
+<span class="badge" id="musicCount">Música: 0</span>
+<span class="badge" id="adsCount">Publicidad: 0</span>
+<span class="badge" id="timerBadge">Contador: --:--</span>
+<div class="notice">
+Para OBS usa solamente <strong>reproductor_obs_limpio.html</strong>. Este panel puede quedar abierto en otra ventana y no aparecerá en la transmisión.
+</div>
+</div>
+
+<div class="card">
+<strong>Videos musicales cargados</strong>
+<div id="musicList" class="list"></div>
+</div>
+
+<div class="card">
+<strong>Publicidades cargadas</strong>
+<div id="adsList" class="list"></div>
+</div>
+</div>
+</div>
+
+<script>
+const channel = new BroadcastChannel("tv_musical_channel");
+const musicInput = document.getElementById("musicInput");
+const musicFolderInput = document.getElementById("musicFolderInput");
+const adsInput = document.getElementById("adsInput");
+const adEvery = document.getElementById("adEvery");
+const adsPerBlock = document.getElementById("adsPerBlock");
+const adMode = document.getElementById("adMode");
+const afterAdMode = document.getElementById("afterAdMode");
+const musicOrder = document.getElementById("musicOrder");
+const playBtn = document.getElementById("playBtn");
+const pauseBtn = document.getElementById("pauseBtn");
+const nextBtn = document.getElementById("nextBtn");
+const stopBtn = document.getElementById("stopBtn");
+const sendConfigBtn = document.getElementById("sendConfigBtn");
+const reloadPlayerBtn = document.getElementById("reloadPlayerBtn");
+const clearBtn = document.getElementById("clearBtn");
+const statusEl = document.getElementById("status");
+const musicList = document.getElementById("musicList");
+const adsList = document.getElementById("adsList");
+const musicCount = document.getElementById("musicCount");
+const adsCount = document.getElementById("adsCount");
+const timerBadge = document.getElementById("timerBadge");
+
+let music = [];
+let ads = [];
+
+function status(text){statusEl.textContent = text}
+function config(){
+ return {
+  adEvery:Number(adEvery.value || 10),
+  adsPerBlock:Number(adsPerBlock.value || 1),
+  adMode:adMode.value,
+  afterAdMode:afterAdMode.value,
+  musicOrder:musicOrder.value
+ };
+}
+function send(type,payload={}){channel.postMessage({type,payload})}
+function sendAll(){
+ send("set_playlist",{music,ads,config:config()});
+ status("Contenido y configuración enviados al reproductor limpio.");
+}
+function addFiles(files,target){
+ [...files].forEach(file=>{
+  if(!file.type.startsWith("video/")) return;
+  const relativePath = file.webkitRelativePath || "";
+  const folder = relativePath.includes("/") ? relativePath.split("/").slice(0,-1).join("/") : "";
+  const exists = target.some(v=>v.name===file.name && v.size===file.size && v.lastModified===file.lastModified);
+  if(exists) return;
+  target.push({name:file.name,url:URL.createObjectURL(file),size:file.size,lastModified:file.lastModified,folder});
+ });
+ render();
+ sendAll();
+}
+function render(){
+ musicCount.textContent = "Música: " + music.length;
+ adsCount.textContent = "Publicidad: " + ads.length;
+ musicList.innerHTML = music.length ? music.map((v,i)=>{
+  const folder = v.folder ? "<br><small>Carpeta: "+v.folder+"</small>" : "";
+  return "<div class='item'>"+(i+1)+". "+v.name+folder+"</div>";
+ }).join("") : "<div class='item'>Sin videos musicales</div>";
+ adsList.innerHTML = ads.length ? ads.map((v,i)=>"<div class='item'>"+(i+1)+". "+v.name+"</div>").join("") : "<div class='item'>Sin publicidades</div>";
+}
+musicInput.onchange = e=>addFiles(e.target.files,music);
+musicFolderInput.onchange = e=>addFiles(e.target.files,music);
+adsInput.onchange = e=>addFiles(e.target.files,ads);
+sendConfigBtn.onclick = ()=>{send("config",config());status("Configuración enviada al reproductor.")};
+playBtn.onclick = ()=>{
+ sendAll();
+ send("play",{});
+ playBtn.classList.add("active");
+ pauseBtn.classList.remove("active");
+ status("Play enviado. El contador de publicidad inició.");
+};
+pauseBtn.onclick = ()=>{
+ send("pause",{});
+ pauseBtn.classList.add("active");
+ playBtn.classList.remove("active");
+ status("Pausa enviada.");
+};
+nextBtn.onclick = ()=>{send("next",{});status("Siguiente video enviado.")};
+stopBtn.onclick = ()=>{
+ send("stop",{});
+ playBtn.classList.remove("active");
+ pauseBtn.classList.remove("active");
+ status("Stop enviado.");
+};
+reloadPlayerBtn.onclick = ()=>{sendAll();send("reload",{});status("Reproductor actualizado.")};
+clearBtn.onclick = ()=>{
+ music=[];ads=[];render();send("clear",{});status("Listas limpiadas.");
+};
+channel.onmessage = event=>{
+ const data = event.data || {};
+ if(data.type === "player_status"){
+  status(data.payload.message || "Reproductor activo.");
+  if(data.payload.timer) timerBadge.textContent = "Contador: " + data.payload.timer;
+ }
+};
+render();
+</script>
+</body>
+</html>

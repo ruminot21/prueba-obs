@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Reproductor OBS Limpio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
+#player{width:100vw;height:100vh;object-fit:contain;background:#000;display:block}
+#message{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:white;font-family:Arial,Helvetica,sans-serif;font-size:24px;text-align:center;padding:30px;background:#000}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<video id="player" playsinline preload="metadata"></video>
+<div id="message">Reproductor limpio listo.<br>Abre el panel de control y presiona Play.</div>
+
+<script>
+const channel = new BroadcastChannel("tv_musical_channel");
+const player = document.getElementById("player");
+const message = document.getElementById("message");
+
+let music = [];
+let ads = [];
+let cfg = {adEvery:10,adsPerBlock:2,adMode:"time",afterAdMode:"resume",musicOrder:"random"};
+let musicIndex = 0;
+let adIndex = 0;
+let adBlockCount = 0;
+let isAdPlaying = false;
+let started = false;
+let lastAdTime = Date.now();
+let randomQueue = [];
+let resumeVideoIndex = 0;
+let resumePosition = 0;
+let mustResumeAfterAd = true;
+
+function tell(messageText,extra={}){
+ channel.postMessage({type:"player_status",payload:{message:messageText,...extra}});
+}
+function formatTime(sec){
+ sec = Math.max(0,Math.floor(sec || 0));
+ const m = String(Math.floor(sec/60)).padStart(2,"0");
+ const s = String(sec%60).padStart(2,"0");
+ return m + ":" + s;
+}
+function shuffleArray(array){
+ const copy = [...array];
+ for(let i=copy.length-1;i>0;i--){
+  const j = Math.floor(Math.random()*(i+1));
+  [copy[i],copy[j]]=[copy[j],copy[i]];
+ }
+ return copy;
+}
+function rebuildRandomQueue(){
+ randomQueue = shuffleArray(music.map((_,i)=>i));
+ if(randomQueue.length>1 && randomQueue[0]===musicIndex){randomQueue.push(randomQueue.shift())}
+ tell("Lista musical barajada automáticamente.");
+}
+function getRandomMusicIndex(){
+ if(music.length<=1) return 0;
+ if(randomQueue.length===0) rebuildRandomQueue();
+ return randomQueue.shift();
+}
+function loadVideo(item){
+ if(!item) return;
+ player.src = item.url;
+ player.load();
+ message.classList.add("hidden");
+}
+async function safePlay(){
+ try{
+  await player.play();
+  started = true;
+  message.classList.add("hidden");
+ }catch(e){
+  message.classList.remove("hidden");
+  message.innerHTML = "Autoplay bloqueado.<br>Presiona Play nuevamente desde el panel.";
+  tell("Autoplay bloqueado. Presiona Play nuevamente.");
+ }
+}
+function playMusic(){
+ if(!music.length){
+  message.classList.remove("hidden");
+  message.innerHTML = "No hay videos musicales cargados.";
+  tell("No hay videos musicales cargados.");
+  return;
+ }
+ isAdPlaying = false;
+ adBlockCount = 0;
+ if(cfg.musicOrder === "random" && !player.src){musicIndex = getRandomMusicIndex()}
+ loadVideo(music[musicIndex]);
+ safePlay();
+ tell("Reproduciendo música.");
+}
+function nextMusic(){
+ if(!music.length) return;
+ if(cfg.musicOrder === "random"){musicIndex = getRandomMusicIndex()}
+ else{musicIndex = (musicIndex + 1) % music.length}
+ playMusic();
+}
+function shouldPlayAd(){
+ return (Date.now() - lastAdTime) >= Number(cfg.adEvery || 10) * 60 * 1000;
+}
+function saveResumePoint(){
+ resumeVideoIndex = musicIndex;
+ resumePosition = player.currentTime || 0;
+ mustResumeAfterAd = cfg.afterAdMode === "resume";
+}
+function playAdBlock(){
+ if(!ads.length){
+  lastAdTime = Date.now();
+  tell("Tiempo de publicidad cumplido, pero no hay publicidades cargadas.");
+  if(cfg.afterAdMode === "resume") resumeMusic();
+  else nextMusic();
+  return;
+ }
+ saveResumePoint();
+ isAdPlaying = true;
+ adBlockCount = 0;
+ playNextAd();
+}
+function playNextAd(){
+ const maxAds = Math.max(1,Number(cfg.adsPerBlock || 1));
+ if(adBlockCount >= maxAds){finishAdBlock();return}
+ const item = ads[adIndex];
+ adIndex = (adIndex + 1) % ads.length;
+ adBlockCount++;
+ loadVideo(item);
+ safePlay();
+ tell("Publicidad " + adBlockCount + " de " + maxAds + ".");
+}
+function finishAdBlock(){
+ isAdPlaying = false;
+ lastAdTime = Date.now();
+ if(mustResumeAfterAd) resumeMusic();
+ else nextMusic();
+}
+function resumeMusic(){
+ if(!music.length) return;
+ musicIndex = resumeVideoIndex;
+ isAdPlaying = false;
+ adBlockCount = 0;
+ loadVideo(music[musicIndex]);
+ const restore = ()=>{
+  try{
+   const safePosition = Math.max(0,Math.min(resumePosition,player.duration || resumePosition));
+   player.currentTime = safePosition;
+  }catch(e){}
+  safePlay();
+  player.removeEventListener("loadedmetadata",restore);
+ };
+ player.addEventListener("loadedmetadata",restore);
+ tell("Continuando el mismo video donde quedó.");
+}
+player.addEventListener("ended",()=>{
+ if(isAdPlaying){playNextAd();return}
+ if(cfg.adMode === "song" && shouldPlayAd()) playAdBlock();
+ else nextMusic();
+});
+setInterval(()=>{
+ const everySec = Number(cfg.adEvery || 10) * 60;
+ const elapsed = (Date.now() - lastAdTime) / 1000;
+ const remaining = everySec - elapsed;
+ tell("Reproductor funcionando.",{timer:formatTime(remaining)});
+ if(started && !isAdPlaying && cfg.adMode === "time" && !player.paused && shouldPlayAd()){
+  playAdBlock();
+ }
+},1000);
+
+channel.onmessage = event=>{
+ const data = event.data || {};
+ const type = data.type;
+ const payload = data.payload || {};
+ if(type === "set_playlist"){
+  music = payload.music || [];
+  ads = payload.ads || [];
+  cfg = {...cfg,...(payload.config || {})};
+  randomQueue = [];
+  tell("Playlist recibida en reproductor limpio.");
+ }
+ if(type === "config"){
+  cfg = {...cfg,...payload};
+  tell("Configuración actualizada.");
+ }
+ if(type === "play"){
+  lastAdTime = Date.now();
+  if(!player.src) playMusic();
+  else safePlay();
+  tell("Play recibido. Contador de publicidad iniciado.",{timer:formatTime(Number(cfg.adEvery || 10) * 60)});
+ }
+ if(type === "pause"){
+  player.pause();
+  tell("Reproducción pausada.");
+ }
+ if(type === "next"){
+  isAdPlaying = false;
+  mustResumeAfterAd = false;
+  lastAdTime = Date.now();
+  nextMusic();
+  tell("Siguiente video musical.");
+ }
+ if(type === "stop"){
+  player.pause();
+  player.removeAttribute("src");
+  player.load();
+  started = false;
+  isAdPlaying = false;
+  message.classList.remove("hidden");
+  message.innerHTML = "Reproductor detenido.";
+  tell("Reproductor detenido.");
+ }
+ if(type === "reload"){
+  randomQueue = [];
+  tell("Reproductor actualizado.");
+ }
+ if(type === "clear"){
+  music=[];ads=[];randomQueue=[];
+  player.pause();
+  player.removeAttribute("src");
+  player.load();
+  message.classList.remove("hidden");
+  message.innerHTML = "Listas limpiadas.";
+  tell("Listas limpiadas.");
+ }
+};
+tell("Reproductor limpio abierto.");
+</script>
+</body>
+</html>
